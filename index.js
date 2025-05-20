@@ -1,54 +1,56 @@
 
 const express = require('express');
-const axios = require('axios');
 const bodyParser = require('body-parser');
-
+const { OpenAI } = require('openai');
 const app = express();
+const port = process.env.PORT || 3000;
+
 app.use(bodyParser.json());
 
-const API_KEY = 'YOUR_OPENAI_PROJECT_API_KEY';
-const ASSISTANT_ID = 'YOUR_ASSISTANT_ID';
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
+const assistant_id = process.env.ASSISTANT_ID;
+const thread_id = process.env.THREAD_ID;
 
 app.post('/', async (req, res) => {
-  const { prompt } = req.body;
+  const prompt = req.body.prompt;
 
   try {
-    const headers = {
-      'Authorization': `Bearer ${API_KEY}`,
-      'Content-Type': 'application/json'
-    };
-
-    const threadRes = await axios.post('https://api.openai.com/v1/threads', {}, { headers });
-    const threadId = threadRes.data.id;
-
-    await axios.post(`https://api.openai.com/v1/threads/${threadId}/messages`, {
-      role: 'user',
+    await openai.beta.threads.messages.create(thread_id, {
+      role: "user",
       content: prompt
-    }, { headers });
+    });
 
-    const runRes = await axios.post(`https://api.openai.com/v1/threads/${threadId}/runs`, {
-      assistant_id: ASSISTANT_ID
-    }, { headers });
+    const run = await openai.beta.threads.runs.create(thread_id, {
+      assistant_id: assistant_id,
+    });
 
-    const runId = runRes.data.id;
+    let status;
+    let tries = 0;
+    let run_result;
 
-    let status = 'in_progress';
-    while (status === 'in_progress') {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      const statusCheck = await axios.get(`https://api.openai.com/v1/threads/${threadId}/runs/${runId}`, { headers });
-      status = statusCheck.data.status;
+    while (tries < 20) {
+      run_result = await openai.beta.threads.runs.retrieve(thread_id, run.id);
+      status = run_result.status;
+
+      if (status === "completed") break;
+      if (status === "failed") throw new Error("❌ Run failed");
+
+      await new Promise(r => setTimeout(r, 1000));
+      tries++;
     }
 
-    const messagesRes = await axios.get(`https://api.openai.com/v1/threads/${threadId}/messages`, { headers });
-    const reply = messagesRes.data.data[0].content[0].text.value;
+    const messages = await openai.beta.threads.messages.list(thread_id);
+    const reply = messages.data[0]?.content[0]?.text?.value || "❌ No reply received";
 
     res.json({ reply });
-  } catch (error) {
-    console.error(error?.response?.data || error.message);
-    res.status(500).json({ error: 'Failed to process request' });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Something went wrong" });
   }
 });
 
-app.listen(3000, () => {
-  console.log('Server running on port 3000');
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
 });
